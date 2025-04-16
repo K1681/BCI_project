@@ -1,7 +1,8 @@
 import numpy as np
 import mne
 import matplotlib.pyplot as plt
-from scipy.signal import butter, lfilter, iirnotch
+from scipy.signal import butter, lfilter, iirnotch, welch
+from scipy.integrate import simpson
 import csv
 
 # Filters
@@ -13,13 +14,61 @@ def notch_filter(data, fn, fs, q):
     b, a = iirnotch(fn, q, fs)
     return lfilter(b, a, data)
 
+def bandpower(data, sf, band, window_sec=None, relative=False):
+    """Compute the average power of the signal x in a specific frequency band.
+
+    Parameters
+    ----------
+    data : 1d-array
+        Input signal in the time-domain.
+    sf : float
+        Sampling frequency of the data.
+    band : list
+        Lower and upper frequencies of the band of interest.
+    window_sec : float
+        Length of each window in seconds.
+        If None, window_sec = (1 / min(band)) * 2
+    relative : boolean
+        If True, return the relative power (= divided by the total power of the signal).
+        If False (default), return the absolute power.
+
+    Return
+    ------
+    bp : float
+        Absolute or relative band power.
+    """
+    band = np.asarray(band)
+    low, high = band
+
+    # Define window length
+    if window_sec is not None:
+        nperseg = window_sec * sf
+    else:
+        nperseg = (2 / low) * sf
+
+    # Compute the modified periodogram (Welch)
+    freqs, psd = welch(data, sf, nperseg=nperseg)
+
+    # Frequency resolution
+    freq_res = freqs[1] - freqs[0]
+
+    # Find closest indices of band in frequency vector
+    idx_band = np.logical_and(freqs >= low, freqs <= high)
+
+    # Integral approximation of the spectrum using Simpson's rule.
+    bp = simpson(psd[idx_band], dx=freq_res)
+
+    if relative:
+        bp /= simpson(psd, dx=freq_res)
+    return bp
+
 def main():
     # Constants
-    T = 5492  # Recording time (seconds) of each user.
+    T = 5492  # Recording time (sec) of each user.
     fs = 256  # Rampling rate (Hz)
-    fl = 1    # Lower frequency of band pass filer
-    fh = 80   # Higher frequency of band pass filter
-    fn = 60   # Line freequency, to be removed by notch filter
+    fl = 1    # Lower frequency of band pass filer (Hz)
+    fh = 80   # Higher frequency of band pass filter (Hz)
+    fn = 60   # Line freequency, to be removed by notch filter (Hz)
     q = 100   # Quality factor of the notch filter
     no_channels = 214  # Number of channels
     baseline_name = "relax"
@@ -28,9 +77,11 @@ def main():
     emotion_end_name = "exit"
     emotions_file_name = "sub-02_task-ImaginedEmotion_events.txt"
     data_file_name = "sub-02_task-ImaginedEmotion_eeg.set"
+    freq_band_names = ["delta", "theta", "alpha", "beta", "gamma"]  # names of the brain waves
+    freq_bands = np.asanyarray([[1, 4], [4, 8], [8, 12], [12 ,30], [30, 80]])  # frequency ranges of the brain waves (Hz)
+    window_length = 4  # length of Welch's window (sec)
 
     # Reading baseline annotations
-    # N = len(emotion_names)  # Number of emotions to detect
     T_max = 0
     baseline_times = np.zeros(2)
     with open(f"sources/{emotions_file_name}", 'r') as text_file:
@@ -60,6 +111,7 @@ def main():
                     T_max = emotion_times[counter][2] - emotion_times[counter][1]
                 counter += 1
     emotion_times = np.asarray(emotion_times, dtype=np.float32)
+    no_emotions = len(emotion_times)  # to account for the baseline
 
     # Reading EEG data
     raw = mne.io.read_raw_eeglab(f"./sources/{data_file_name}")
@@ -73,17 +125,40 @@ def main():
         filtered_data[channel] = notch_filter(bp_data[channel], fn, fs, q)
 
     # Epoching data
-    epoched_data = np.zeros((no_channels, len(emotion_times), int(T_max*fs)))
-    # epoched_data = [[] for _ in range(no_channels)]
-    for emotion_no in range(len(emotion_times)):
+    epoched_data = np.zeros((no_channels, no_emotions+1, int(T_max*fs)))
+    # baseline epoching
+    baseline_start_index, = np.where(np.isclose(times, baseline_times[0]))
+    baseline_end_index, = np.where(np.isclose(times, baseline_times[1]))
+    baseline_start_index = baseline_start_index[0]
+    baseline_end_index = baseline_end_index[0]
+    for channel_no in range(no_channels):
+        epoched_data[channel_no][0][0:(baseline_end_index-baseline_start_index)] = data[channel_no][baseline_start_index:baseline_end_index]
+    # emotions epoching
+    for emotion_no in range(no_emotions):
         start_index, = np.where(np.isclose(times, emotion_times[emotion_no][1]))
         end_index, = np.where(np.isclose(times, emotion_times[emotion_no][2]))
         start_index = start_index[0]
         end_index = end_index[0]
         for channel_no in range(no_channels):
-            epoched_data[channel_no][emotion_no][0:(end_index - start_index)] = data[channel_no][start_index:end_index]
+            epoched_data[channel_no][emotion_no+1][0:(end_index - start_index)] = data[channel_no][start_index:end_index]
     epoched_data = np.asarray(epoched_data, dtype=np.float32)
 
+    # Feature extraction
+    baseline_bp = np.zeros((no_channels, len(freq_band_names)))
+    emotion_bp_db = np.zeros((no_channels, no_emotions, len(freq_band_names)))
+    # baseline exraction
+    for channel_no in range(no_channels):
+        for freq_band_no in range(len(freq_band_names)):
+            baseline_bp[channel_no][freq_band_no] = bandpower(epoched_data[channel_no][0], fs, freq_bands[freq_band_no])
+    # emotion extraction
+    for channel_no in range(no_channels):
+        for emotion_no in range(no_emotions):
+            for freq_band_no in range(len(freq_band_names)):
+                temp_bp = bandpower(epoched_data[channel_no][emotion_no+1], fs, freq_bands[freq_band_no], window_length, True)/baseline_bp[channel_no][freq_band_no]
+                emotion_bp_db[channel_no][emotion_no][freq_band_no] = 10*np.log10(temp_bp) if temp_bp>0 else -1
+
+    #print(emotion_bp_db.shape)
+    #print(emotion_bp_db)
 
     """
     # Visualization
