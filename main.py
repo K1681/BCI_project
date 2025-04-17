@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from scipy.signal import butter, lfilter, iirnotch, welch
 from scipy.integrate import simpson
 import csv
+import json
+import os
 
 # Filters
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
@@ -62,29 +64,45 @@ def bandpower(data, sf, band, window_sec=None, relative=False):
         bp /= simpson(psd, dx=freq_res)
     return bp
 
-def main():
+def extract_user_features(n):
+    # File names
+    parameters_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_eeg.json"
+    anotations_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_events.txt"
+    data_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_eeg.set"
+    features_outfile_name = f"result/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_features.csv"
+    feature_dimensions_outfile_name = f"result/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_feature_dimensions.csv"
+    os.makedirs(os.path.dirname(features_outfile_name), exist_ok=True)
+    os.makedirs(os.path.dirname(feature_dimensions_outfile_name), exist_ok=True)
+
     # Constants
-    T = 5492  # Recording time (sec) of each user.
-    fs = 256  # Rampling rate (Hz)
     fl = 1    # Lower frequency of band pass filer (Hz)
     fh = 80   # Higher frequency of band pass filter (Hz)
-    fn = 60   # Line freequency, to be removed by notch filter (Hz)
     q = 100   # Quality factor of the notch filter
-    no_channels = 214  # Number of channels
     baseline_name = "relax"
     baseline_end_name = "ImaginationSuggestions"
     emotion_names = ["awe", "frustration", "joy", "anger", "happy", "sad", "love", "grief", "fear", "compassion", "jealousy", "content", "grief", "relief", "excite", "disgust"]
     emotion_end_name = "exit"
-    emotions_file_name = "sub-02_task-ImaginedEmotion_events.txt"
-    data_file_name = "sub-02_task-ImaginedEmotion_eeg.set"
     freq_band_names = ["delta", "theta", "alpha", "beta", "gamma"]  # names of the brain waves
     freq_bands = np.asanyarray([[1, 4], [4, 8], [8, 12], [12 ,30], [30, 80]])  # frequency ranges of the brain waves (Hz)
+    no_freq_bands = len(freq_band_names)
     window_length = 4  # length of Welch's window (sec)
+
+    # Reading parameters
+    fn = 0
+    no_channels = 0
+    T = 0
+    fs = 0
+    with open(parameters_infile_name, mode="r", encoding="utf-8") as constants_infile:
+        constants_json = json.load(constants_infile)
+        fn = float(constants_json["PowerLineFrequency"])
+        no_channels = int(constants_json["EEGChannelCount"])
+        T = int(constants_json["RecordingDuration"])
+        fs = int(constants_json["SamplingFrequency"])
 
     # Reading baseline annotations
     T_max = 0
     baseline_times = np.zeros(2)
-    with open(f"sources/{emotions_file_name}", 'r') as text_file:
+    with open(anotations_infile_name, 'r') as text_file:
         tsv_values = list(csv.reader(text_file, delimiter="\t"))
         for row in range(len(tsv_values)):
             if(tsv_values[row][6].strip() == baseline_name):
@@ -96,7 +114,7 @@ def main():
 
     # Reading emotion annotations
     emotion_times = []
-    with open(f"sources/{emotions_file_name}", 'r') as text_file:
+    with open(anotations_infile_name, 'r') as text_file:
         tsv_values = list(csv.reader(text_file, delimiter="\t"))
         counter = 0
         for row in range(len(tsv_values)):
@@ -114,7 +132,7 @@ def main():
     no_emotions = len(emotion_times)  # to account for the baseline
 
     # Reading EEG data
-    raw = mne.io.read_raw_eeglab(f"./sources/{data_file_name}")
+    raw = mne.io.read_raw_eeglab(data_infile_name)
     data, times = raw.get_data(return_times=True, units='uV')
 
     # Filtering data  # TODO: consolidate into one matrix
@@ -141,24 +159,27 @@ def main():
         end_index = end_index[0]
         for channel_no in range(no_channels):
             epoched_data[channel_no][emotion_no+1][0:(end_index - start_index)] = data[channel_no][start_index:end_index]
-    epoched_data = np.asarray(epoched_data, dtype=np.float32)
 
     # Feature extraction
-    baseline_bp = np.zeros((no_channels, len(freq_band_names)))
-    emotion_bp_db = np.zeros((no_channels, no_emotions, len(freq_band_names)))
+    baseline_bp = np.zeros((no_channels, no_freq_bands))
+    emotion_bp_db = np.zeros((no_channels, no_emotions, no_freq_bands))
     # baseline exraction
     for channel_no in range(no_channels):
-        for freq_band_no in range(len(freq_band_names)):
+        for freq_band_no in range(no_freq_bands):
             baseline_bp[channel_no][freq_band_no] = bandpower(epoched_data[channel_no][0], fs, freq_bands[freq_band_no])
     # emotion extraction
     for channel_no in range(no_channels):
         for emotion_no in range(no_emotions):
-            for freq_band_no in range(len(freq_band_names)):
+            for freq_band_no in range(no_freq_bands):
                 temp_bp = bandpower(epoched_data[channel_no][emotion_no+1], fs, freq_bands[freq_band_no], window_length, True)/baseline_bp[channel_no][freq_band_no]
                 emotion_bp_db[channel_no][emotion_no][freq_band_no] = 10*np.log10(temp_bp) if temp_bp>0 else -1
 
-    #print(emotion_bp_db.shape)
-    #print(emotion_bp_db)
+    with open(features_outfile_name, "w") as features_outfile:
+        emotion_bp_db.flatten().tofile(features_outfile, sep=",")
+        features_outfile.flush()
+    with open(feature_dimensions_outfile_name, "w") as feature_dimensions_outfile:
+        np.asanyarray(emotion_bp_db.shape).tofile(feature_dimensions_outfile, sep=",")
+        feature_dimensions_outfile.flush()
 
     """
     # Visualization
@@ -180,6 +201,9 @@ def main():
 
     plt.show()
     """
+
+def main():
+    extract_user_features(2)
 
 if __name__ == "__main__":
     main()
