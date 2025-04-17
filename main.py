@@ -63,7 +63,7 @@ def bandpower(data, sf, band, window_sec=None, relative=False):
         bp /= simpson(psd, dx=freq_res)
     return bp
 
-def extract_user_features(n):
+def extract_subject_features(n):
     # File names
     parameters_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_eeg.json"
     anotations_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_events.txt"
@@ -221,7 +221,8 @@ def extract_user_features(n):
     """
 
 def main():
-    extract_user_features(4)
+    for subject in range(7, 10):
+        extract_subject_features(subject)
 
 if __name__ == "__main__":
     main()
