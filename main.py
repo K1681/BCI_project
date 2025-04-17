@@ -7,7 +7,6 @@ import csv
 import json
 import os
 
-# Filters
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     b, a = butter(order, [(2*lowcut)/fs, (2*highcut)/fs], btype='band')
     return lfilter(b, a, data)
@@ -162,7 +161,7 @@ def extract_user_features(n):
 
     # Feature extraction
     baseline_bp = np.zeros((no_channels, no_freq_bands))
-    emotion_bp_db = np.zeros((no_channels, no_emotions, no_freq_bands))
+    result_bp_db = np.zeros((no_channels, no_emotions, no_freq_bands+1))
     # baseline exraction
     for channel_no in range(no_channels):
         for freq_band_no in range(no_freq_bands):
@@ -172,15 +171,34 @@ def extract_user_features(n):
         for emotion_no in range(no_emotions):
             for freq_band_no in range(no_freq_bands):
                 temp_bp = bandpower(epoched_data[channel_no][emotion_no+1], fs, freq_bands[freq_band_no], window_length, True)/baseline_bp[channel_no][freq_band_no]
-                emotion_bp_db[channel_no][emotion_no][freq_band_no] = 10*np.log10(temp_bp) if temp_bp>0 else -1
+                result_bp_db[channel_no][emotion_no][freq_band_no] = 10*np.log10(temp_bp) if temp_bp>0 else -1
+    # adding emotion label to the results
+    for channel_no in range(no_channels):
+        for emotion_no in range(no_emotions):
+            result_bp_db[channel_no][emotion_no][no_freq_bands] = emotion_times[emotion_no][0]
 
     with open(features_outfile_name, "w") as features_outfile:
-        emotion_bp_db.flatten().tofile(features_outfile, sep=",")
+        result_bp_db.flatten().tofile(features_outfile, sep=",")
         features_outfile.flush()
     with open(feature_dimensions_outfile_name, "w") as feature_dimensions_outfile:
-        np.asanyarray(emotion_bp_db.shape).tofile(feature_dimensions_outfile, sep=",")
+        np.asanyarray(result_bp_db.shape).tofile(feature_dimensions_outfile, sep=",")
         feature_dimensions_outfile.flush()
 
+    """
+    The results are in the form of
+    User_i =
+    [
+        [[5 brain waves + 1 emotion label], [5 brain waves + 1 emotion label], ...x15emotions]
+        [[5 brain waves + 1 emotion label], [5 brain waves + 1 emotion label], ...x15emotions]
+        [[5 brain waves + 1 emotion label], [5 brain waves + 1 emotion label], ...x15emotions]
+        .
+        .
+        .
+        x200+channels
+    ]
+
+    The results are sotred as a flattened() np array in a csv, along with another csv noting the original shape.
+    """
     """
     # Visualization
     x_right = 10
@@ -203,7 +221,7 @@ def extract_user_features(n):
     """
 
 def main():
-    extract_user_features(2)
+    extract_user_features(4)
 
 if __name__ == "__main__":
     main()
