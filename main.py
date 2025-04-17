@@ -63,7 +63,7 @@ def bandpower(data, sf, band, window_sec=None, relative=False):
         bp /= simpson(psd, dx=freq_res)
     return bp
 
-def extract_subject_features(n):
+def extract_subject_features(n, visualization=False):
     # File names
     parameters_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_eeg.json"
     anotations_infile_name = f"source/sub-{n if n>10 else f"0{n}"}/sub-{n if n>10 else f"0{n}"}_task-ImaginedEmotion_events.txt"
@@ -199,30 +199,37 @@ def extract_subject_features(n):
 
     The results are sotred as a flattened() np array in a csv, along with another csv noting the original shape.
     """
-    """
-    # Visualization
-    x_right = 10
-    # Raw data
-    plt.subplot(3, 1, 1)
-    plt.plot(times, data[0])
-    plt.xlim(0, x_right)
+    if(visualization):
+        # Visualization file names
+        visualization_outfolder_name = f"visualization/sub-{n if n>10 else f"0{n}"}/"
+        os.makedirs(os.path.dirname(visualization_outfolder_name), exist_ok=True)
 
-    # Band Pass filter
-    plt.subplot(3, 1, 2)
-    plt.plot(times, bp_data)
-    plt.xlim(0, x_right)
+        # Visualization parameters
+        T_view = 0.5
+        end_index = int(T_view*fs)
 
-    # Notch filter
-    plt.subplot(3, 1, 3)
-    plt.plot(times, np_data)
-    plt.xlim(0, x_right)
+        # Raw data vs BandPass filter
+        plt.plot(times[0:end_index], data[0][0:end_index], color="r", label="Raw data")
+        plt.plot(times[0:end_index], bp_data[0][0:end_index], color='g', label="Bandpass filter")
+        plt.xlabel("Time (sec)")
+        plt.ylabel("Magnitude (uV)")
+        plt.title("Raw data vs Bandpass filter")
+        plt.legend()
+        plt.savefig(f"{visualization_outfolder_name}Raw_vs_BP.pdf")
+        plt.cla()
 
-    plt.show()
-    """
+        # Bandpass filter vs Filtered data
+        plt.plot(times[0:end_index], bp_data[0][0:end_index], color="r", label="Bandpass filter")
+        plt.plot(times[0:end_index], filtered_data[0][0:end_index], color='g', label="Bandpass+Notch filter")
+        plt.xlabel("Time (sec)")
+        plt.ylabel("Magnitude (uV)")
+        plt.title("Bandpass filter vs Bandpass+Notch filter")
+        plt.legend()
+        plt.savefig(f"{visualization_outfolder_name}BP_vs_Filtered.pdf")
+        plt.cla()
 
 def main():
-    for subject in range(7, 10):
-        extract_subject_features(subject)
+    extract_subject_features(1, True)
 
 if __name__ == "__main__":
     main()
